@@ -1,0 +1,23 @@
+services:
+  my-server:
+    build: . # compose.yml 을 기준으로 한 상대경로의 Dockerfile 을 찾음
+    ports:
+      - 8080:8080
+    depends_on:
+      my-db: # << 컨테이너 실행 후 my-server 실행, service_healthy 하다면
+        condition: service_healthy
+
+  my-db:
+    image: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+      MYSQL_DATABASE: stock
+#    volumes:
+#      - ./mysql_data:/var/lib/mysql
+    ports:
+      - 3306:3306
+    healthcheck: # service_healthy 의 조건
+      test: ["CMD", "mysqladmin", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
