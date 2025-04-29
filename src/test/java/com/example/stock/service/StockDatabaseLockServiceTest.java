@@ -1,6 +1,7 @@
 package com.example.stock.service;
 
 import com.example.stock.domain.Stock;
+import com.example.stock.facade.LockSockFacade;
 import com.example.stock.repository.StockRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,20 +12,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
-class PessimisticLockStockServiceTest {
+class StockDatabaseLockServiceTest {
 
     /**
      * Mysql 을 활용한 다양한 방법
      *
-     *   - Pessimistic Lock
+     *   - Pessimistic Lock (경합이 빈번하다면 추천하지 않음)
      * 실제로 데이터에 Lock 을 걸어서 정합성을 맞추는 방법입니다.
      * exclusive lock 을 걸게되며 다른 트랜잭션에서는 lock 이 해제되기전에 데이터를 가져갈 수 없게됩니다.
      * 데드락이 걸릴 수 있기때문에 주의하여 사용하여야 합니다.
      *
      *   - Optimistic Lock
+     *   (경합이 빈번하다면 추천하지 않음, 재시도 하기 위해 오래 걸림)
      * 실제로 Lock 을 이용하지 않고 버전을 이용함으로써 정합성을 맞추는 방법입니다.
      * 먼저 데이터를 읽은 후에 update 를 수행할 때 현재 내가 읽은 버전이 맞는지 확인하며 업데이트 합니다.
      * 내가 읽은 버전에서 수정사항이 생겼을 경우에는 application에서 다시 읽은후에 작업을 수행해야 합니다.
@@ -37,7 +38,10 @@ class PessimisticLockStockServiceTest {
      */
 
     @Autowired
-    private PessimisticLockStockService stockService;
+    private StockDatabaseLockService stockService;
+
+    @Autowired
+    private LockSockFacade optimisticLockSockFacade;
 
     @Autowired
     private StockRepository stockRepository;
@@ -56,6 +60,64 @@ class PessimisticLockStockServiceTest {
             executorService.submit(() -> {
                 try {
                     stockService.decrease_pessimisticLock(savedStock.getId(), 1L);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        latch.await();
+
+        // then
+        Stock stock = stockRepository.findById(savedStock.getId())
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 재고입니다."));
+        assertThat(stock.getQuantity()).isZero();
+    }
+
+    @Test
+    void 동시에_100개의_재고_감소_optimisticLock() throws InterruptedException {
+        // given
+        Stock savedStock = stockRepository.save(new Stock(1L, 100L));
+
+        int threadCount = 100;
+        ExecutorService executorService = Executors.newFixedThreadPool(32);
+        CountDownLatch latch = new CountDownLatch(threadCount);
+
+        // when
+        for (int i = 0; i < threadCount; i++) {
+            executorService.submit(() -> {
+                try {
+                    optimisticLockSockFacade.decrease_optimisticLock(savedStock.getId(), 1L);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        latch.await();
+
+        // then
+        Stock stock = stockRepository.findById(savedStock.getId())
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 재고입니다."));
+        assertThat(stock.getQuantity()).isZero();
+    }
+
+    @Test
+    void 동시에_100개의_재고_감소_namedLock() throws InterruptedException {
+        // given
+        Stock savedStock = stockRepository.save(new Stock(1L, 100L));
+
+        int threadCount = 100;
+        ExecutorService executorService = Executors.newFixedThreadPool(32);
+        CountDownLatch latch = new CountDownLatch(threadCount);
+
+        // when
+        for (int i = 0; i < threadCount; i++) {
+            executorService.submit(() -> {
+                try {
+                    optimisticLockSockFacade.decrease_namedLock(savedStock.getId(), 1L);
                 } finally {
                     latch.countDown();
                 }
